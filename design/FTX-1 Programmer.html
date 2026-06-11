@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FTX-1 Programmer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Barlow+Condensed:wght@500;700;800&family=Barlow:wght@500;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* Seven-segment display via Cherylene-like simulated digits using CSS only fallback */
+      @import url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/css/dseg.css");
+
+      :root {
+        --font-sans: "Space Grotesk", -apple-system, system-ui, sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+        --font-segment: "DSEG7 Classic", "JetBrains Mono", monospace;
+      }
+
+      /* THEME: FTX-1 Display (mimics the radio's TFT panel) */
+      [data-theme="graphite"] {
+        --bg-deep: #000000;
+        --bg-panel: #050505;
+        --bg-elev: #0c0c0c;
+        --bg-rail: #000000;
+        --bg-display: #000000;
+        --line: #2a2a2a;
+        --line-strong: #4a4a4a;
+        --ink: #ffffff;
+        --ink-mute: #c8c8c8;
+        --ink-faint: #7a7a7a;
+        --ink-ghost: #3a3a3a;
+        --accent: #ff9a1f;            /* orange — primary highlight (FTX-1 active state) */
+        --accent-soft: rgba(255, 154, 31, 0.16);
+        --ftx-cyan: #00d6ff;
+        --ftx-magenta: #ff2d8a;
+        --ftx-orange: #ff9a1f;
+        --ftx-yellow: #ffd400;
+        --ftx-green: #00d24b;
+        --ftx-red: #ff2a2a;
+        --ftx-grey: #5a5a5a;          /* inactive button face */
+        --ftx-grey-2: #2a2a2a;        /* darker face */
+        --segment-on: #ffffff;        /* freq digits are bold white */
+        --segment-off: rgba(255, 255, 255, 0.08);
+        --segment-glow: rgba(255, 255, 255, 0.0);
+        --ok: #00d24b;
+        --warn: #ffd400;
+        --err: #ff2a2a;
+        --tx: #ff2a2a;
+        --tx-soft: rgba(255, 42, 42, 0.18);
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; height: 100%; }
+      body {
+        background: var(--bg-deep);
+        color: var(--ink);
+        font-family: var(--font-sans);
+        font-size: 14px;
+        line-height: 1.4;
+        -webkit-font-smoothing: antialiased;
+        overflow: hidden;
+      }
+      #root { height: 100vh; }
+
+      /* Generic primitives */
+      .mono { font-family: var(--font-mono); }
+      .seg { font-family: var(--font-segment); font-feature-settings: normal; }
+
+      button { font-family: inherit; font-size: inherit; color: inherit; cursor: pointer; }
+      input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+
+      /* Hide scrollbar chrome but keep scroll */
+      .scroll-thin::-webkit-scrollbar { width: 10px; height: 10px; }
+      .scroll-thin::-webkit-scrollbar-track { background: var(--bg-rail); }
+      .scroll-thin::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
+      .scroll-thin::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
+
+      /* Selection */
+      ::selection { background: var(--accent-soft); color: var(--ink); }
+
+      /* Subtle panel grain */
+      .panel-grain {
+        background-image:
+          radial-gradient(circle at 25% 15%, color-mix(in oklab, var(--accent) 4%, transparent) 0%, transparent 40%),
+          radial-gradient(circle at 80% 85%, color-mix(in oklab, var(--accent) 3%, transparent) 0%, transparent 50%);
+      }
+
+      /* Display glow effect */
+      .seg-glow {
+        text-shadow:
+          0 0 6px var(--segment-glow),
+          0 0 18px color-mix(in oklab, var(--segment-glow) 40%, transparent);
+      }
+
+      /* Animations */
+      @keyframes pulse-tx {
+        0%, 100% { box-shadow: 0 0 0 0 var(--tx-soft), inset 0 0 0 1px var(--tx); }
+        50% { box-shadow: 0 0 0 6px transparent, inset 0 0 0 1px var(--tx); }
+      }
+      @keyframes blink-cursor {
+        0%, 49% { opacity: 1; }
+        50%, 100% { opacity: 0; }
+      }
+      @keyframes scan-line {
+        from { transform: translateY(-100%); }
+        to { transform: translateY(100%); }
+      }
+      @keyframes meter-bounce {
+        0%, 100% { transform: scaleY(0.6); }
+        25% { transform: scaleY(1); }
+        50% { transform: scaleY(0.45); }
+        75% { transform: scaleY(0.85); }
+      }
+
+      /* Scanline overlay for displays */
+      .display-scan {
+        position: relative;
+        overflow: hidden;
+      }
+      .display-scan::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: repeating-linear-gradient(
+          to bottom,
+          transparent 0,
+          transparent 2px,
+          rgba(0, 0, 0, 0.18) 2px,
+          rgba(0, 0, 0, 0.18) 3px
+        );
+        opacity: 0.5;
+      }
+
+      /* Form controls baseline */
+      .ctrl {
+        background: #000;
+        border: 1px solid var(--line-strong);
+        color: var(--ink);
+        padding: 7px 10px;
+        border-radius: 0;
+        outline: none;
+        font-family: var(--font-mono);
+        font-size: 13px;
+        transition: border-color 120ms, background 120ms;
+      }
+      .ctrl:focus {
+        border-color: var(--ftx-orange);
+        box-shadow: inset 0 0 0 1px var(--ftx-orange);
+      }
+      .ctrl[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+      /* FTX-1 hardware button: stacked colored value + white label, hard rectangular */
+      .btn {
+        background: linear-gradient(180deg, #424242 0%, #1a1a1a 100%);
+        border: 1px solid #000;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(0,0,0,0.4);
+        color: var(--ink);
+        padding: 6px 12px;
+        border-radius: 2px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        font-family: var(--font-mono);
+        transition: filter 80ms;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .btn:hover:not(:disabled) { filter: brightness(1.25); }
+      .btn:active:not(:disabled) { filter: brightness(0.85); }
+      .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+      .btn-primary {
+        background: linear-gradient(180deg, #b06a14 0%, #6a3f08 100%);
+        border-color: #000;
+        color: #fff;
+        text-shadow: 0 0 6px rgba(255, 154, 31, 0.7);
+      }
+      .btn-danger {
+        background: linear-gradient(180deg, #b01818 0%, #6a0a0a 100%);
+        border-color: #000;
+        color: #fff;
+      }
+      .btn-ghost {
+        background: transparent;
+        border-color: transparent;
+        box-shadow: none;
+        color: var(--ink-mute);
+      }
+      .btn-ghost:hover:not(:disabled) {
+        background: #1a1a1a;
+        color: var(--ink);
+      }
+
+      /* FTX-style stacked button: big colored value over small white label */
+      .ftx-btn {
+        background: linear-gradient(180deg, #4a4a4a 0%, #1c1c1c 100%);
+        border: 1px solid #000;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(0,0,0,0.4);
+        border-radius: 2px;
+        padding: 6px 10px 5px;
+        min-width: 76px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1px;
+        font-family: var(--font-mono);
+        cursor: pointer;
+        transition: filter 80ms;
+      }
+      .ftx-btn:hover:not(:disabled) { filter: brightness(1.2); }
+      .ftx-btn:active:not(:disabled) { filter: brightness(0.85); }
+      .ftx-btn-value {
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        line-height: 1.05;
+      }
+      .ftx-btn-label {
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        color: #ffffff;
+        line-height: 1.05;
+        text-transform: uppercase;
+      }
+      .ftx-cyan    { color: var(--ftx-cyan); }
+      .ftx-magenta { color: var(--ftx-magenta); }
+      .ftx-orange  { color: var(--ftx-orange); }
+      .ftx-yellow  { color: var(--ftx-yellow); }
+      .ftx-green   { color: var(--ftx-green); }
+      .ftx-red     { color: var(--ftx-red); }
+      .ftx-white   { color: #ffffff; }
+      .ftx-grey    { color: var(--ftx-grey); }
+
+      /* FTX state pill (e.g. SUB VFO, MAIN VFO, FM, USB, RX, TXRX) */
+      .ftx-pill {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        padding: 2px 7px;
+        border-radius: 2px;
+        text-transform: uppercase;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        line-height: 1.4;
+      }
+      .ftx-pill-outline { background: transparent; border: 1px solid #ffffff; color: #ffffff; }
+      .ftx-pill-cyan    { background: var(--ftx-cyan); color: #000; }
+      .ftx-pill-magenta { background: var(--ftx-magenta); color: #fff; }
+      .ftx-pill-orange  { background: var(--ftx-orange); color: #000; }
+      .ftx-pill-yellow  { background: var(--ftx-yellow); color: #000; }
+      .ftx-pill-green   { background: var(--ftx-green); color: #000; }
+      .ftx-pill-red     { background: var(--ftx-red); color: #fff; }
+
+      /* LED dot */
+      .led {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        display: inline-block;
+        background: var(--ink-ghost);
+        box-shadow: inset 0 0 0 1px rgba(0,0,0,0.3);
+      }
+      .led-on { background: var(--ok); box-shadow: 0 0 8px var(--ok), inset 0 0 0 1px rgba(0,0,0,0.3); }
+      .led-warn { background: var(--warn); box-shadow: 0 0 8px var(--warn), inset 0 0 0 1px rgba(0,0,0,0.3); }
+      .led-err { background: var(--err); box-shadow: 0 0 8px var(--err), inset 0 0 0 1px rgba(0,0,0,0.3); }
+      .led-tx { background: var(--tx); box-shadow: 0 0 10px var(--tx), inset 0 0 0 1px rgba(0,0,0,0.3); }
+
+      /* Tag chip */
+      .chip {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        padding: 2px 6px;
+        border-radius: 2px;
+        background: var(--bg-elev);
+        color: var(--ink-mute);
+        border: 1px solid var(--line);
+        text-transform: uppercase;
+      }
+      .chip-accent { background: var(--ftx-orange); color: #000; border-color: transparent; }
+      .chip-ok { background: var(--ftx-green); color: #000; border-color: transparent; }
+      .chip-warn { background: var(--ftx-yellow); color: #000; border-color: transparent; }
+      .chip-err { background: var(--ftx-red); color: #fff; border-color: transparent; }
+
+      /* Section card */
+      .card {
+        background: var(--bg-panel);
+        border: 1px solid var(--line-strong);
+        border-radius: 0;
+      }
+
+      /* Header tab pill */
+      .tab {
+        position: relative;
+        padding: 8px 14px;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        font-family: var(--font-mono);
+        color: var(--ink-faint);
+        cursor: pointer;
+        border: none;
+        background: transparent;
+        transition: color 120ms;
+      }
+      .tab:hover { color: var(--ink-mute); }
+      .tab[data-active="true"] { color: var(--ftx-orange); }
+      .tab[data-active="true"]::after {
+        content: "";
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        bottom: 0;
+        height: 2px;
+        background: var(--ftx-orange);
+        box-shadow: 0 0 6px var(--ftx-orange);
+      }
+
+      /* TX armed warning bar */
+      .tx-arm-bar {
+        background: var(--tx-soft);
+        border-bottom: 1px solid var(--tx);
+        color: var(--tx);
+      }
+      .tx-arm-bar .led-tx {
+        animation: pulse-tx 1.6s infinite;
+      }
+
+      /* Knob/dial */
+      .knob {
+        position: relative;
+        background: radial-gradient(circle at 30% 25%, var(--bg-elev) 0%, var(--bg-rail) 80%);
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        box-shadow: 0 6px 14px rgba(0,0,0,0.3), inset 0 -2px 4px rgba(0,0,0,0.2), inset 0 2px 3px rgba(255,255,255,0.04);
+      }
+      .knob::after {
+        content: "";
+        position: absolute;
+        top: 8%;
+        left: 50%;
+        width: 3px;
+        height: 22%;
+        background: var(--accent);
+        border-radius: 2px;
+        transform: translateX(-50%);
+        box-shadow: 0 0 6px var(--accent);
+      }
+
+      /* Header logo monogram */
+      .monogram {
+        font-family: var(--font-mono);
+        font-weight: 700;
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        padding: 6px 10px;
+        border: 1px solid var(--line-strong);
+        border-radius: 4px;
+        background: var(--bg-elev);
+        color: var(--ink);
+      }
+
+      /* Table */
+      table.grid { border-collapse: separate; border-spacing: 0; width: 100%; }
+      table.grid th {
+        position: sticky;
+        top: 0;
+        background: var(--bg-panel);
+        text-align: left;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ink-faint);
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        z-index: 2;
+      }
+      table.grid td {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+        font-family: var(--font-mono);
+        font-size: 13px;
+        vertical-align: middle;
+      }
+      table.grid tr.row:hover td { background: color-mix(in oklab, var(--bg-panel) 70%, var(--accent-soft)); }
+      table.grid tr.row[data-dirty="true"] td { background: color-mix(in oklab, var(--bg-panel) 80%, color-mix(in oklab, var(--warn) 25%, transparent)); }
+      table.grid tr.row[data-empty="true"] td { color: var(--ink-faint); }
+      table.grid tr.row[data-selected="true"] td { background: color-mix(in oklab, var(--bg-panel) 70%, var(--accent-soft)); box-shadow: inset 2px 0 0 var(--accent); }
+      table.grid tr.group-header td {
+        background: var(--bg-rail);
+        font-family: var(--font-mono);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--accent);
+        padding: 8px 12px;
+      }
+
+      .row-input {
+        background: transparent;
+        border: 1px solid transparent;
+        padding: 4px 6px;
+        border-radius: 4px;
+        width: 100%;
+        outline: none;
+        font-family: inherit;
+        font-size: inherit;
+      }
+      .row-input:hover { border-color: var(--line); }
+      .row-input:focus { border-color: var(--accent); background: var(--bg-deep); }
+
+      /* Modal */
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: color-mix(in oklab, var(--bg-deep) 85%, transparent);
+        backdrop-filter: blur(4px);
+        z-index: 50;
+        display: grid;
+        place-items: center;
+      }
+    </style>
+  </head>
+  <body data-theme="graphite">
+    <div id="root"></div>
+
+    <!-- React + Babel -->
+    <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+    <script type="text/babel" src="tweaks-panel.jsx"></script>
+    <script type="text/babel" src="src/data.jsx"></script>
+    <script type="text/babel" src="src/atoms.jsx"></script>
+    <script type="text/babel" src="src/connect.jsx"></script>
+    <script type="text/babel" src="src/control.jsx"></script>
+    <script type="text/babel" src="src/memory.jsx"></script>
+    <script type="text/babel" src="src/settings.jsx"></script>
+    <script type="text/babel" src="src/debug.jsx"></script>
+    <script type="text/babel" src="src/app.jsx"></script>
+  </body>
+</html>

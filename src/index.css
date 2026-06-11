@@ -1,0 +1,9 @@
+/* Minimal normalize — replaces Tailwind preflight */
+*, *::before, *::after { box-sizing: border-box; }
+img, svg, video, canvas { display: block; max-width: 100%; }
+
+html,
+body,
+#root {
+  height: 100%;
+}
